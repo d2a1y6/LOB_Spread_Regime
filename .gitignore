@@ -1,0 +1,111 @@
+# ==================== Mac系统特有文件 ====================
+# .DS_Store是Mac自动生成的文件夹属性文件
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+# macOS桌面服务文件
+Icon?
+# ==================== Git相关 ====================
+# Git本地配置（避免提交本地仓库配置）
+.gitattributes
+# ==================== 编辑器/IDE配置 ====================
+# VSCode
+.vscode/
+.idea/          # IntelliJ IDEA/PyCharm
+*.swp           # Vim临时文件
+*.swo
+*~              # 编辑器临时文件
+# ==================== 编程语言通用 ====================
+# 编译产物/二进制文件
+*.class         # Java
+*.o             # C/C++
+*.so
+# 日志文件
+*.log
+logs/
+# 缓存/临时文件
+tmp/
+temp/
+cache/
+# ==================== Python ====================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+*.egg-info/
+.installed.cfg
+*.egg
+# ==================== Node.js ====================
+node_modules/
+npm-debug.log
+yarn-debug.log
+yarn-error.log
+pnpm-lock.yaml
+package-lock.json
+yarn.lock
+# ==================== 前端通用 ====================
+dist/
+build/
+coverage/
+*.min.js
+*.min.css
+# ==================== 数据文件（新增） ====================
+# 结构化数据文件
+*.csv           # 逗号分隔文件
+*.tsv           # 制表符分隔文件
+*.xlsx          # Excel文件
+*.xls           # 旧版Excel
+*.xlsm          # 带宏的Excel
+*.ods           # 开源电子表格
+*.jsonl         # 行式JSON
+*.ndjson        # 新行分隔JSON
+# 数据库备份/导出
+*.sql           # SQL脚本/备份
+*.dump          # 数据库dump文件
+*.bak           # 通用备份文件
+*.backup        # 备份文件
+# 大数据/二进制数据
+*.parquet       # 列式存储数据
+*.avro          # Avro数据文件
+*.orc           # ORC数据文件
+*.hdf5          # HDF5数据
+*.h5            # HDF5简写
+*.feather       # Feather数据格式
+*.npy           # NumPy数组
+*.npz           # NumPy压缩数组
+data
+# 临时数据文件
+*.tmp.data
+*.temp.data
+# ==================== 其他 ====================
+# 敏感配置文件
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+# 压缩包
+*.zip
+*.tar.gz
+*.rar
+# 数据库文件
+*.db
+*.sqlite
+*.sqlite3

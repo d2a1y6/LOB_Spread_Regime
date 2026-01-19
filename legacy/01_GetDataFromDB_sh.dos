@@ -1,0 +1,229 @@
+/*
+程序名称：沪市高频数据特征提取 (Feature Extraction for SH Level2)
+
+1. 程序概述：
+   本程序负责从 DolphinDB 数据库加载沪市 Level2 快照与逐笔成交数据，
+   计算微观结构特征（如订单簿失衡、流动性、波动率等），并输出为标准化格式。
+
+2. 核心差异点 (相对于深市)：
+   - Snapshot 表名：MarketData
+   - Tick 表名：mdl_4_24_0
+   - 买卖方向：直接使用 TickBSFlag 字段 ('B'/'S')。
+   - 字段映射：无需重命名，直接使用原始字段。
+
+3. 输出数据：
+   - 包含 Stock, Time 及 13 个核心特征。
+   - 极小值特征已放大 (Scaling) 以保留精度。
+*/
+
+clearAllCache()
+
+// =============================================================================
+// 1. 环境与参数配置
+// =============================================================================
+dbPath_Snapshot = "dfs://sh_level2_1"
+tbName_Snapshot = "MarketData"      // [配置] 沪市快照表
+dbPath_Tick     = "dfs://sh_level2_1"
+tbName_Tick     = "mdl_4_24_0"      // [配置] 沪市逐笔成交表
+
+startDate = 2025.07.21
+endDate   = 2025.07.25
+
+// 沪市目标股票池
+targetStock = ['600000', '600009', '600010', '600011', '600015', '600016', 
+    '600018', '600019', '600023', '600025', '600026', '600027', '600028', 
+    '600029', '600030', '600031', '600036', '600039', '600048', '600050', 
+    '600061', '600066', '600085', '600089', '600104', '600111', '600115', 
+    '600150', '600160', '600161', '600176', '600183', '600188', '600196', 
+    '600219', '600233', '600276', '600309', '600346', '600362', '600372', 
+    '600377', '600406', '600415', '600426', '600436', '600438', '600460', 
+    '600482', '600489', '600515', '600519', '600522', '600547', '600570', 
+    '600584', '600585', '600588', '600600', '600660', '600674', '600690', 
+    '600741', '600760', '600795', '600803', '600809', '600845', '600875', 
+    '600886', '600887', '600893', '600900', '600905', '600918', '600919', 
+    '600926', '600930', '600938', '600941', '600958', '600989', '600999', 
+    '601006', '601009', '601012', '601018', '601021', '601058', '601059', 
+    '601066', '601077', '601088', '601100', '601111', '601117', '601127', 
+    '601136', '601138', '601166', '601169', '601186', '601211', '601225', 
+    '601229', '601236', '601238', '601288', '601298', '601318', '601319', 
+    '601328', '601336', '601360', '601377', '601390', '601398', '601456', 
+    '601600', '601601', '601607', '601618', '601628', '601633', '601658', 
+    '601668', '601669', '601688', '601689', '601698', '601728', '601766', 
+    '601788', '601800', '601808', '601816', '601818', '601825', '601838', 
+    '601857', '601868', '601872', '601877', '601878', '601881', '601888', 
+    '601898', '601899', '601901', '601916', '601919', '601939', '601985', 
+    '601988', '601995', '601998', '603019', '603195', '603259', '603260', 
+    '603288', '603296', '603369', '603392', '603501', '603799', '603893', 
+    '603986', '603993', '605117', '605499', '688008', '688009', '688012', 
+    '688036', '688041', '688047', '688082', '688111', '688126', '688169', 
+    '688187', '688223', '688256', '688271', '688303', '688396', '688472', 
+    '688506', '688981']
+
+print("Step 1: 环境初始化完成，准备处理 " + startDate + " 至 " + endDate)
+
+// =============================================================================
+// 2. 数据处理函数
+// =============================================================================
+def processOneDay(dbPath_Snapshot, tbName_Snapshot, dbPath_Tick, tbName_Tick, currentDate, stocks) {
+    print(">>> 正在处理日期: " + currentDate + " ...")
+
+    // 2.1 构建全天时间网格 (含下午)
+    // 逻辑：09:30-11:30 及 13:00-15:00，每3秒一个点
+    time_am = 09:30:00.000 + (0..2400) * 3000 
+    time_pm = 13:00:00.000 + (0..2400) * 3000
+    time_grid = join(time_am, time_pm)
+    basic_grid = cj(table(stocks as SecurityID), table(time_grid as UpdateTime))
+    
+    // 2.2 加载 Snapshot 数据
+    // [沪市逻辑] 字段名称标准，直接加载
+    pt_snap = loadTable(dbPath_Snapshot, tbName_Snapshot)
+    raw_snap = select SecurityID, UpdateTime, LastPrice,
+                 BidPrice1, BidPrice2, BidPrice3, BidPrice4, BidPrice5,
+                 AskPrice1, AskPrice2, AskPrice3, AskPrice4, AskPrice5,
+                 BidVolume1, BidVolume2, BidVolume3, BidVolume4, BidVolume5,
+                 AskVolume1, AskVolume2, AskVolume3, AskVolume4, AskVolume5,
+                 TotalBidVol, TotalAskVol
+          from pt_snap
+          where Date = currentDate, SecurityID in stocks, 
+                ((UpdateTime between 09:30:00.000 : 11:30:00.000) or 
+                 (UpdateTime between 13:00:00.000 : 15:00:00.000))
+    
+    if(count(raw_snap) == 0) { return NULL }
+
+    // 2.3 加载 Tick 数据
+    // [沪市逻辑] 方向判断：直接使用 TickBSFlag ('B'->1, 'S'->-1)
+    pt_tick = loadTable(dbPath_Tick, tbName_Tick)
+    raw_tick = select SecurityID, TickTime, Qty,
+                      iif(TickBSFlag == 'B', 1, iif(TickBSFlag == 'S', -1, 0)) as BSVal
+               from pt_tick
+               where Date = currentDate, SecurityID in stocks,
+                     ((TickTime between 09:29:57.000 : 11:30:00.000) or 
+                      (TickTime between 12:59:57.000 : 15:00:00.000))
+
+    // 2.4 数据聚合
+    // A. Snapshot 对齐
+    data_base = select SecurityID,
+                       UpdateTime, 
+                       LastPrice,
+                       BidPrice1, BidPrice2, BidPrice3, BidPrice4, BidPrice5,
+                       AskPrice1, AskPrice2, AskPrice3, AskPrice4, AskPrice5,
+                       BidVolume1, BidVolume2, BidVolume3, BidVolume4, BidVolume5,
+                       AskVolume1, AskVolume2, AskVolume3, AskVolume4, AskVolume5,
+                       TotalBidVol, TotalAskVol
+                from aj(basic_grid, raw_snap, `SecurityID`UpdateTime)
+    data_base = select * from data_base where LastPrice > 0
+
+    // B. Tick 聚合 (wj window join)
+    // 逻辑：聚合过去 3 秒内的成交统计
+    data_agg = wj(data_base, raw_tick, -3000:0, 
+                  <[sum(Qty) as TradeVol_All, 
+                    max(Qty) as TradeVol_Max, 
+                    count(TickTime) as TradeCount, 
+                    sum(Qty * BSVal) as TradeVol_Net]>, 
+                  `SecurityID`UpdateTime, `SecurityID`TickTime)
+    
+    update data_agg set TradeVol_All = 0, TradeVol_Max = 0, TradeCount = 0, TradeVol_Net = 0 
+    where isNull(TradeVol_All)
+
+    // =========================================================================
+    // 2.5 分步特征计算 (Common Logic)
+    // =========================================================================
+
+    // Step 1: 基础价格与深度 (行内计算)
+    update data_agg set 
+        MidPrice = (AskPrice1 + BidPrice1) / 2.0,
+        Total_Depth = TotalBidVol + TotalAskVol
+
+    // Step 2: 衍生静态特征 (依赖 Step 1)
+    update data_agg set
+        Accum_Vol_Diff = TradeVol_Net,
+        VolumeAll = TradeVol_All,
+        VolumeMax = TradeVol_Max,
+        Immediacy = 3000.0 / (TradeCount + 1e-9),
+        LobImbalance = (AskVolume1 - BidVolume1) / (AskVolume1 + BidVolume1 + 1e-9),
+        SumBidVol5 = BidVolume1 + BidVolume2 + BidVolume3 + BidVolume4 + BidVolume5,
+        SumAskVol5 = AskVolume1 + AskVolume2 + AskVolume3 + AskVolume4 + AskVolume5,
+        Relative_Spread = (AskPrice1 - BidPrice1) / (MidPrice + 1e-9),
+        MicroPrice = (BidPrice1 * AskVolume1 + AskPrice1 * BidVolume1) / (BidVolume1 + AskVolume1 + 1e-9)
+
+    // Step 3: 二次衍生 (依赖 Step 2)
+    update data_agg set
+        DeepLobImbalance = (SumAskVol5 - SumBidVol5) / (SumAskVol5 + SumBidVol5 + 1e-9),
+        Micro_Mid_Spread = MicroPrice - MidPrice,
+        MidPrice_Log = log(MidPrice + 1e-9)
+
+    // Step 4: 时序差分特征 (Context by SecurityID)
+    update data_agg set
+        PastReturn   = deltas(MidPrice_Log),
+        MidPrice_Chg = abs(deltas(MidPrice)), 
+        Depth_Change = deltas(Total_Depth)
+        context by SecurityID
+
+    // Step 4.5: 预计算滞后项
+    update data_agg set
+        PrevReturn = move(PastReturn, 1)
+        context by SecurityID
+
+    // Step 5: 高级时序统计
+    update data_agg set
+        Lambda     = MidPrice_Chg / (VolumeAll + 1e-9),
+        Volatility = mstd(PastReturn, 5),
+        AutoCov    = nullFill(mcorr(PastReturn, PrevReturn, 5), 0) * mstd(PastReturn, 5) * mstd(PrevReturn, 5)
+        context by SecurityID
+
+    // 2.6 清洗与精度控制
+    data_final = select * from data_agg where isValid(Volatility)
+
+    // 2.7 最终输出
+    result = select 
+        SecurityID as Stock, 
+        temporalFormat(concatDateTime(currentDate, UpdateTime), "yyyy.MM.dd HH:mm:ss") as Time, 
+        
+        // 价格保留 3 位
+        round(MidPrice, 3) as MidPrice,
+        
+        // 量相关：保留 2 位
+        round(Accum_Vol_Diff, 2) as Accum_Vol_Diff,
+        round(VolumeMax, 2) as VolumeMax,
+        round(VolumeAll, 2) as VolumeAll,
+        round(Immediacy, 2) as Immediacy,
+        round(Depth_Change, 2) as Depth_Change,
+        
+        // 不平衡度：本身就是比率，保留 4 位即可
+        round(LobImbalance, 4) as LobImbalance,
+        round(DeepLobImbalance, 4) as DeepLobImbalance,
+        
+        // [关键] 极小值特征放大策略 (Scaling Strategy)
+        // 目的：避免存储 CSV 时出现极小浮点数导致的精度丢失
+        round(Relative_Spread * 10000, 4) as Relative_Spread, // BP
+        round(Micro_Mid_Spread * 1000, 4) as Micro_Mid_Spread,
+        round(PastReturn * 10000, 4) as PastReturn,           // BP
+        round(Lambda * 1000000000, 4) as Lambda,
+        round(Volatility * 10000, 4) as Volatility,
+        round(AutoCov * 10000000, 4) as AutoCov
+
+    from data_final
+
+    return result
+}
+
+// =============================================================================
+// 3. 执行
+// =============================================================================
+print("Step 2: 开始执行按天循环...")
+dateList = startDate..endDate
+results = loop(processOneDay{dbPath_Snapshot, tbName_Snapshot, dbPath_Tick, tbName_Tick, , targetStock}, dateList)
+
+print("Step 3: 合并结果...")
+sh = unionAll(results)
+
+print("====== 任务完成 ======")
+if(count(sh) > 0) {
+    print("总行数: " + count(sh))
+    print("数据预览 (前5行):")
+    print(sh[0:5])
+} else {
+    print("警告: 无数据生成。")
+}
+
+sh
